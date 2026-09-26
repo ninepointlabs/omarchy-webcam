@@ -1,19 +1,54 @@
 # Omarchy Webcam
 
-A bar widget for the Omarchy shell that lets you choose which camera your system uses (built-in, USB, and so on) and opens a small live preview so you can check what that camera sees.
+**Pick which camera your Omarchy system uses, see what it sees, and tune how it looks, all from the bar.**
 
-![Webcam popup](preview.png)
+Most laptops have a built-in camera, and many desks add a USB webcam. This bar widget lists every camera PipeWire knows about, makes the one you pick the system camera, and opens a small live preview so you can check it before a call. From that preview you can also adjust the camera's image settings (brightness, white balance, exposure, zoom and more) and watch each change as you make it.
+
+![Omarchy desktop with the Webcam popup open under its bar icon, listing a built-in camera, an infrared sensor and a USB NexiGo webcam marked as default, and a live preview window in the bottom-right corner](preview.png)
 
 ## What it does
 
-- **Lists every camera** that PipeWire knows about, including USB webcams as they're plugged in. Infrared (Windows Hello-style) sensors are flagged and dimmed.
-- **Sets the system camera.** Clicking a camera makes it PipeWire's default video source (`wpctl set-default`). WirePlumber saves this choice, so it persists after a reboot.
-- **Adjusts image settings.** Brightness, contrast, saturation, white balance, exposure, gain, anti-flicker, pan/tilt/zoom, and anything else the camera driver offers appear as sliders, switches and choices under the preview, so you can see each change as you make it. Changes are saved per physical camera and reapplied when it's plugged back in or after a reboot.
+### Choose the system camera
+
+<img src="assets/screenshots/camera-picker.png" alt="Webcam popup listing Surface Camera Front, Surface Camera Front (IR) dimmed as infrared, and NexiGo HD Webcam highlighted as the default, each with settings and preview buttons" width="460" align="right">
+
+- **Lists every camera** PipeWire knows about, including USB webcams as they're plugged in. Infrared (Windows Hello-style) sensors are flagged and dimmed.
+- **Sets the system camera.** Click a camera to make it PipeWire's default video source (`wpctl set-default`). WirePlumber saves this choice, so it persists after a reboot.
+- **Previews any camera.** Click the video icon on a row to watch that camera, or right-click the bar icon to preview the current default. The bar icon lights up while a preview is open.
+
+<br clear="right">
+
+### Preview and tune the image
+
+<img src="assets/screenshots/image-settings.png" alt="Live preview window for the NexiGo HD Webcam at 1280x720 and 60 fps, with sliders for brightness, contrast, saturation, hue, gamma and gain and an Auto white balance switch below the video" width="420" align="right">
+
 - **Opens a live preview window** in the bottom-right corner. It shows the camera name, resolution and frame rate. You can drag the title bar to move it, press `⇆` or `m` to mirror the image, and press `✕`, `Esc` or `q` to close it.
+- **Adjusts image settings.** Click the gear on a camera's row, or in the preview's title bar. Brightness, contrast, saturation, white balance, exposure, gain, anti-flicker, pan/tilt/zoom, and anything else the camera driver offers appear as sliders, switches and choices under the video, so you see every change live.
+- **Remembers them.** Changes are saved per physical camera and reapplied when it's plugged back in or after a reboot. A `•` marks settings you've changed; double-click a name to put it back, or use **Reset all**.
+
+<br clear="right">
 
 ### Which apps respect the choice?
 
 Apps that access cameras through PipeWire or the camera portal (Firefox, Chromium/Chrome with PipeWire camera support, OBS's PipeWire source, GNOME/KDE apps) treat the default camera as the preferred one. Apps that open `/dev/videoN` directly, such as older V4L2 tools, still choose their own device, usually through a setting inside the app.
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/ninepointlabs/omarchy-webcam.git --enable
+```
+
+For development, symlink a checkout instead:
+
+```bash
+ln -sfn ~/Projects/omarchy-webcam ~/.config/omarchy/plugins/ninepointlabs.webcam
+omarchy-shell shell rescanPlugins
+omarchy plugin enable ninepointlabs.webcam
+```
+
+Requirements: PipeWire + WirePlumber (`pw-dump`, `wpctl`), `jq`, `v4l-utils` (`v4l2-ctl`, for image settings and IR detection), and `qt6-multimedia` with the FFmpeg backend for the preview. All of these ship with Omarchy.
+
+> **Developing through a symlink:** the shell watches `~/.config/omarchy/plugins/` with `inotifywait`, which doesn't follow symlinks, so edits in your checkout don't hot-reload. The preview window reloads every time it opens. To load `Webcam.qml` changes, run `omarchy restart shell`.
 
 ## Using it
 
@@ -63,24 +98,6 @@ These go on the widget's entry in `~/.config/omarchy/shell.json`:
 | `previewWidth` | `480` | Width of the preview window in logical pixels (240–1280) |
 | `showIr` | `true` | Include infrared sensors in the list |
 
-## Install
-
-```bash
-omarchy plugin add https://github.com/ninepointlabs/omarchy-webcam.git --enable
-```
-
-For development, symlink a checkout instead:
-
-```bash
-ln -sfn ~/Projects/omarchy-webcam ~/.config/omarchy/plugins/ninepointlabs.webcam
-omarchy-shell shell rescanPlugins
-omarchy plugin enable ninepointlabs.webcam
-```
-
-Requirements: PipeWire + WirePlumber (`pw-dump`, `wpctl`), `jq`, `v4l-utils` (`v4l2-ctl`, for image settings and IR detection), and `qt6-multimedia` with the FFmpeg backend for the preview. All of these ship with Omarchy.
-
-> **Developing through a symlink:** the shell watches `~/.config/omarchy/plugins/` with `inotifywait`, which doesn't follow symlinks, so edits in your checkout don't hot-reload. The preview window reloads every time it opens. To load `Webcam.qml` changes, run `omarchy restart shell`.
-
 ## How it's built
 
 - `Webcam.qml`: the bar icon and popup. It never parses devices on its own; it only renders the JSON that `webcamctl list` returns.
@@ -94,3 +111,7 @@ test/webcamctl.test.sh
 ```
 
 Runs the helper against a recorded `pw-dump` fixture, a fake `wpctl`, and a fake `v4l2-ctl` that mimics how the driver locks manual controls while auto modes are on. It does not need real cameras.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
