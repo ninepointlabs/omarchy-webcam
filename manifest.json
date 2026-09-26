@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ninepointlabs.webcam",
   "name": "Webcam",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Nine Point Labs",
   "description": "Pick the system camera and open a live preview window",
   "kinds": ["bar-widget"],

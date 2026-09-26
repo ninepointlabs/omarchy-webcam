@@ -6,6 +6,10 @@
 #   webcamctl preview [device]     open the preview (default camera if omitted)
 #   webcamctl toggle-preview [dev] open the preview, or close it if open
 #   webcamctl stop-preview         close the preview window
+#   webcamctl controls <device>    JSON array of adjustable image controls
+#   webcamctl set-controls <device> name=value...   change and remember controls
+#   webcamctl reset-controls <device>               back to driver defaults
+#   webcamctl restore [device]     reapply remembered controls (all cameras if omitted)
 #
 # "System camera" means PipeWire/WirePlumber's default video source
 # (default.configured.video.source). Browsers, OBS and other apps that reach
@@ -17,10 +21,16 @@ self_dir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 plugin_dir=$(dirname -- "$self_dir")
 preview_qml="$plugin_dir/preview/shell.qml"
 
-# Test seams: WEBCAMCTL_PW_DUMP points at a pw-dump JSON file, WEBCAMCTL_WPCTL
-# replaces wpctl.
+# Test seams: WEBCAMCTL_PW_DUMP points at a pw-dump JSON file; WEBCAMCTL_WPCTL,
+# WEBCAMCTL_V4L2CTL and WEBCAMCTL_V4L_DIR replace wpctl, v4l2-ctl and /dev/v4l.
 pw_dump_file=${WEBCAMCTL_PW_DUMP:-}
 wpctl_bin=${WEBCAMCTL_WPCTL:-wpctl}
+v4l2ctl_bin=${WEBCAMCTL_V4L2CTL:-v4l2-ctl}
+v4l_dir=${WEBCAMCTL_V4L_DIR:-/dev/v4l}
+
+# Controls reset whenever a camera is unplugged or the machine reboots, so
+# changes made here are remembered per physical camera and reapplied.
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-webcam/controls"
 
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-webcam"
 pid_file="$runtime_dir/preview.pid"
@@ -43,8 +53,8 @@ pw_dump() {
 # formats. They are real V4L2 nodes, so we list them but flag them.
 is_ir() {
   local device=$1 formats
-  [[ -c "$device" ]] && command -v v4l2-ctl >/dev/null || { echo false; return; }
-  formats=$(v4l2-ctl -d "$device" --list-formats 2>/dev/null | sed -n "s/.*\[[0-9]*\]: '\([^']*\)'.*/\1/p")
+  command -v "$v4l2ctl_bin" >/dev/null || { echo false; return; }
+  formats=$("$v4l2ctl_bin" -d "$device" --list-formats 2>/dev/null | sed -n "s/.*\[[0-9]*\]: '\([^']*\)'.*/\1/p")
   [[ -n "$formats" ]] || { echo false; return; }
   if grep -qvE '^(GREY|Y8|Y10|Y12|Y16|Y10B|Y12I|Z16)$' <<<"$formats"; then echo false; else echo true; fi
 }
@@ -133,7 +143,7 @@ cmd_preview() {
 
   cmd_stop_preview
   mkdir -p -m 700 "$runtime_dir"
-  WEBCAM_DEVICE="$device" WEBCAM_NAME="$name" setsid quickshell -p "$preview_qml" >/dev/null 2>&1 </dev/null &
+  WEBCAMCTL="$self_dir/webcamctl" WEBCAM_DEVICE="$device" WEBCAM_NAME="$name" setsid quickshell -p "$preview_qml" >/dev/null 2>&1 </dev/null &
   echo "$!" >"$pid_file"
 }
 
@@ -145,13 +155,152 @@ cmd_toggle_preview() {
   fi
 }
 
+require_device() {
+  [[ "${1:-}" =~ ^/dev/video[0-9]+$ ]] || fail "device must look like /dev/videoN"
+  command -v "$v4l2ctl_bin" >/dev/null || fail "v4l2-ctl not found (install v4l-utils)"
+}
+
+# Turn `v4l2-ctl --list-ctrls-menus` into JSON. Only int, bool and menu
+# controls are exposed; rectangles, bitmasks and buttons are not useful here.
+controls_json() {
+  "$v4l2ctl_bin" -d "$1" --list-ctrls-menus 2>/dev/null | jq -Rs '
+    def num($k): (capture("(^|\\s)" + $k + "=(?<v>-?[0-9]+)")? | .v | tonumber) // null;
+    def friendly: {
+        white_balance_automatic: "Auto white balance",
+        white_balance_temperature: "White balance",
+        auto_exposure: "Exposure mode",
+        exposure_time_absolute: "Exposure time",
+        exposure_dynamic_framerate: "Dynamic frame rate",
+        backlight_compensation: "Backlight compensation",
+        power_line_frequency: "Anti-flicker",
+        focus_automatic_continuous: "Autofocus",
+        focus_absolute: "Focus",
+        pan_absolute: "Pan",
+        tilt_absolute: "Tilt",
+        zoom_absolute: "Zoom"
+      }[.name] // (.name | gsub("_"; " ") | sub("^(?<a>.)"; "\(.a | ascii_upcase)"));
+    reduce (split("\n")[]) as $line ([];
+      if ($line | test("^\\s*[a-z0-9_]+ 0x[0-9a-f]+ \\(")) then
+        ($line | capture("^\\s*(?<name>[a-z0-9_]+) 0x[0-9a-f]+ \\((?<type>[^)]*)\\)\\s*:\\s*(?<rest>.*)$")) as $m
+        | . + [{
+            name: $m.name,
+            type: $m.type,
+            min: ($m.rest | num("min")), max: ($m.rest | num("max")), step: ($m.rest | num("step")),
+            default: ($m.rest | num("default")), value: ($m.rest | num("value")),
+            inactive: ($m.rest | test("flags=.*inactive")),
+            options: []
+          }]
+      elif ($line | test("^\\s+-?[0-9]+: ")) and length > 0 then
+        ($line | capture("^\\s+(?<v>-?[0-9]+): (?<l>.*)$")) as $o
+        | .[-1].options += [{value: ($o.v | tonumber), label: ($o.l | sub(" Mode$"; "") | sub("^Aperture Priority$"; "Auto"))}]
+      else . end)
+    | map(select(.type == "int" or .type == "bool" or .type == "menu")
+          | .value //= 0 | .min //= 0 | .max //= 1 | .step //= 1 | .default //= .value
+          | .label = friendly)
+  '
+}
+
+# A name that survives replugging: the udev by-id link (vendor, model,
+# serial), falling back to the physical port for cameras without one.
+camera_key() {
+  local device=$1 link
+  for link in "$v4l_dir"/by-id/* "$v4l_dir"/by-path/*; do
+    [[ -L "$link" && "$link" != *usbv2* ]] || continue
+    [[ "$(readlink -f -- "$link")" == "$(readlink -f -- "$device")" ]] || continue
+    printf '%s' "$(basename -- "$link")" | tr -c 'A-Za-z0-9._-' '_'
+    return
+  done
+  basename -- "$device"
+}
+
+cmd_controls() {
+  require_device "${1:-}"
+  controls_json "$1"
+}
+
+# Apply name=value pairs from stdin (one per line). Switches such as auto
+# exposure decide which manual values are writable, so they normally go
+# first; a reset passes "values switches" so manual values are restored
+# before the auto modes lock them. Controls that are inactive at their turn
+# are skipped, not errors.
+apply_controls() {
+  local device=$1 order=${2:-switches values} pairs current name value pass
+  pairs=$(cat)
+  for pass in $order; do
+    current=$(controls_json "$device")
+    while IFS='=' read -r name value; do
+      [[ -n "$name" ]] || continue
+      jq -e --arg n "$name" --arg pass "$pass" '
+        .[] | select(.name == $n and (.inactive | not))
+        | select((.type == "int") == ($pass == "values"))
+      ' <<<"$current" >/dev/null || continue
+      "$v4l2ctl_bin" -d "$device" --set-ctrl="$name=$value" >/dev/null 2>&1 \
+        || echo "webcamctl: could not set $name=$value" >&2
+    done <<<"$pairs"
+  done
+}
+
+# Remember every active control that differs from the driver default.
+save_controls() {
+  local device=$1 file
+  file="$state_dir/$(camera_key "$device").json"
+  mkdir -p -m 700 "$state_dir"
+  controls_json "$device" \
+    | jq 'map(select((.inactive | not) and .value != .default) | {(.name): .value}) | add // {}' >"$file.tmp"
+  mv -f -- "$file.tmp" "$file"
+}
+
+cmd_set_controls() {
+  require_device "${1:-}"
+  local device=$1 pair known
+  shift
+  [[ $# -gt 0 ]] || fail "set-controls needs name=value pairs"
+  known=$(controls_json "$device")
+  for pair in "$@"; do
+    [[ "$pair" =~ ^([a-z0-9_]+)=(-?[0-9]+)$ ]] || fail "bad control: $pair (expected name=integer)"
+    jq -e --arg n "${BASH_REMATCH[1]}" 'any(.[]; .name == $n)' <<<"$known" >/dev/null \
+      || fail "$device has no control named ${BASH_REMATCH[1]}"
+  done
+  printf '%s\n' "$@" | apply_controls "$device"
+  save_controls "$device"
+}
+
+cmd_reset_controls() {
+  require_device "${1:-}"
+  local device=$1
+  controls_json "$device" | jq -r '.[] | "\(.name)=\(.default)"' | apply_controls "$device" "values switches"
+  rm -f -- "$state_dir/$(camera_key "$device").json"
+}
+
+cmd_restore() {
+  local devices device file
+  if [[ -n "${1:-}" ]]; then
+    require_device "$1"
+    devices=$1
+  else
+    command -v "$v4l2ctl_bin" >/dev/null || return 0
+    devices=$(cmd_list | jq -r '.[].device')
+  fi
+  while IFS= read -r device; do
+    [[ -n "$device" ]] || continue
+    file="$state_dir/$(camera_key "$device").json"
+    [[ -r "$file" ]] || continue
+    jq -r 'to_entries[] | select(.key | test("^[a-z0-9_]+$")) | select(.value | type == "number")
+           | "\(.key)=\(.value | floor)"' "$file" | apply_controls "$device"
+  done <<<"$devices"
+}
+
 case "${1:-}" in
   list) shift; cmd_list "$@" ;;
   set-default) shift; cmd_set_default "$@" ;;
   preview) shift; cmd_preview "$@" ;;
   toggle-preview) shift; cmd_toggle_preview "$@" ;;
   stop-preview) shift; cmd_stop_preview ;;
+  controls) shift; cmd_controls "$@" ;;
+  set-controls) shift; cmd_set_controls "$@" ;;
+  reset-controls) shift; cmd_reset_controls "$@" ;;
+  restore) shift; cmd_restore "$@" ;;
   preview-running) preview_pid >/dev/null && echo true || echo false ;;
-  -h|--help|help|"") sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help|"") sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
   *) fail "unknown command: $1 (try --help)" ;;
 esac

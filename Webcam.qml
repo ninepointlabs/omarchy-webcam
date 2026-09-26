@@ -19,6 +19,7 @@ Panel {
   property bool cursorActive: false
   property bool previewRunning: false
   property string lastError: ""
+  property var knownDevices: []
 
   readonly property string webcamctl: String(Qt.resolvedUrl("bin/webcamctl")).replace(/^file:\/\//, "")
   readonly property bool showIr: setting("showIr", true) === true
@@ -36,6 +37,7 @@ Panel {
   readonly property string glyphCamera: "\u{F0100}"
   readonly property string glyphPreview: "\u{F0567}"
   readonly property string glyphStop: "\u{F04DB}"
+  readonly property string glyphSettings: "\u{F0493}"
 
   function refresh() {
     if (!listProc.running) listProc.running = true
@@ -57,10 +59,20 @@ Panel {
         }
       })
       lastError = ""
+      restoreNewCameras()
     } catch (e) {
       lastError = "Could not read camera list"
     }
     if (selectedIndex >= visibleCameras.length) selectedIndex = Math.max(0, visibleCameras.length - 1)
+  }
+
+  // Image controls reset when a camera is plugged in (or at boot); reapply
+  // the ones saved by webcamctl whenever a camera we haven't seen shows up.
+  function restoreNewCameras() {
+    var devices = cameras.map(function(c) { return c.device })
+    var appeared = devices.some(function(d) { return knownDevices.indexOf(d) < 0 })
+    knownDevices = devices
+    if (appeared && !restoreProc.running) restoreProc.running = true
   }
 
   function run(args) {
@@ -75,7 +87,7 @@ Panel {
   }
 
   // With no camera, webcamctl previews whatever is the default right now.
-  function preview(camera) {
+  function preview(camera, withControls) {
     previewProc.command = camera ? [webcamctl, "preview", camera.device] : [webcamctl, "preview"]
     previewProc.environment = {
       WEBCAM_NAME: camera ? camera.label : "",
@@ -84,7 +96,8 @@ Panel {
       WEBCAM_ACCENT: String(Color.accent),
       WEBCAM_BORDER: String(Color.popups.border),
       WEBCAM_FONT: root.fontFamily,
-      WEBCAM_WIDTH: String(root.previewWidth)
+      WEBCAM_WIDTH: String(root.previewWidth),
+      WEBCAM_CONTROLS: withControls === true ? "1" : "0"
     }
     previewProc.running = true
   }
@@ -107,6 +120,8 @@ Panel {
     // Preview the current default camera without opening the popup.
     function preview(): void { root.preview(null) }
     function stopPreview(): void { root.stopPreview() }
+    // Preview the default camera with its image controls expanded.
+    function settings(): void { root.preview(null, true) }
   }
 
   onOpenedChanged: {
@@ -136,6 +151,11 @@ Panel {
   }
 
   Process {
+    id: restoreProc
+    command: [root.webcamctl, "restore"]
+  }
+
+  Process {
     id: actionProc
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function(code) {
@@ -155,8 +175,9 @@ Panel {
 
   // Cameras come and go (USB hotplug); keep the list fresh while visible.
   Timer { interval: 3000; running: root.opened; repeat: true; onTriggered: root.refresh() }
-  // Occasional background refresh keeps the bar tooltip honest.
-  Timer { interval: 30000; running: !root.opened; repeat: true; onTriggered: root.refresh() }
+  // Occasional background refresh keeps the bar tooltip honest and notices
+  // replugged cameras so their saved image controls come back.
+  Timer { interval: 10000; running: !root.opened; repeat: true; onTriggered: root.refresh() }
 
   BarIconButton {
     id: button
@@ -190,6 +211,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "p") root.preview(root.cursorActive ? root.visibleCameras[root.selectedIndex] : null)
+        else if (t === "a") root.preview(root.cursorActive ? root.visibleCameras[root.selectedIndex] : null, true)
         else if (t === "s") root.stopPreview()
         else if (t === "r") root.refresh()
       }
@@ -357,7 +379,7 @@ Panel {
       }
 
       Column {
-        width: parent.width - Style.space(22) - previewButton.width - parent.spacing * 2
+        width: parent.width - Style.space(22) - previewButton.width - settingsButton.width - parent.spacing * 3
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(1)
 
@@ -381,6 +403,18 @@ Panel {
           elide: Text.ElideRight
           width: parent.width
         }
+      }
+
+      Button {
+        id: settingsButton
+        anchors.verticalCenter: parent.verticalCenter
+        iconText: root.glyphSettings
+        iconSize: Style.font.title
+        tooltipText: "Image settings"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        horizontalPadding: Style.space(6)
+        onClicked: root.preview(row.camera, true)
       }
 
       Button {

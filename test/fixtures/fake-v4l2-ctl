@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Minimal v4l2-ctl stand-in for tests. Serves the recorded NexiGo control list,
+# remembers --set-ctrl values in $FAKE_V4L2_STATE, and emulates the driver's
+# "inactive" rules: manual white balance / exposure are read-only while the
+# matching auto mode is on.
+set -euo pipefail
+state=${FAKE_V4L2_STATE:?}
+fixture="$(dirname -- "${BASH_SOURCE[0]}")/v4l2-ctrls-nexigo.txt"
+mkdir -p "$state"
+echo "$*" >>"$state/calls.log"
+
+get() { if [[ -f "$state/$1" ]]; then cat "$state/$1"; else sed -n "s/^ *$1 0x.* default=\(-\{0,1\}[0-9]*\).*/\1/p" "$fixture"; fi; }
+inactive() {
+  case "$1" in
+    white_balance_temperature) [[ "$(get white_balance_automatic)" != 0 ]] ;;
+    exposure_time_absolute) [[ "$(get auto_exposure)" != 1 ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+device=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d) device=$2; shift 2 ;;
+    --list-formats) exit 0 ;;
+    --list-ctrls-menus)
+      [[ "$device" == /dev/video4 ]] || exit 1
+      while IFS= read -r line; do
+        if [[ "$line" =~ ^\ *([a-z0-9_]+)\ 0x ]]; then
+          name=${BASH_REMATCH[1]}
+          line=$(sed -E "s/value=-?[0-9]+/value=$(get "$name")/; s/flags=inactive, /flags=/; s/ flags=inactive$//" <<<"$line")
+          if inactive "$name"; then
+            if [[ "$line" == *flags=* ]]; then line=${line/flags=/flags=inactive, }; else line="$line flags=inactive"; fi
+          fi
+        fi
+        printf '%s\n' "$line"
+      done <"$fixture"
+      exit 0 ;;
+    --set-ctrl=*)
+      pair=${1#--set-ctrl=}; name=${pair%%=*}
+      if inactive "$name"; then echo "VIDIOC_S_EXT_CTRLS: failed: Permission denied" >&2; exit 255; fi
+      echo "${pair#*=}" >"$state/$name"; shift ;;
+    *) shift ;;
+  esac
+done
