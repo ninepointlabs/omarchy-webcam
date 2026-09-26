@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "ninepointlabs.webcam",
+  "name": "Webcam",
+  "version": "0.1.0",
+  "author": "Nine Point Labs",
+  "description": "Pick the system camera and open a live preview window",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Webcam.qml"
+  },
+  "barWidget": {
+    "displayName": "Webcam",
+    "description": "Choose the default camera (built-in, USB, ...) and preview what it sees",
+    "category": "Media",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": { "previewWidth": 480, "showIr": true },
+    "schema": [
+      { "key": "previewWidth", "type": "integer", "label": "Preview width (px)" },
+      { "key": "showIr", "type": "boolean", "label": "Show infrared sensors" }
+    ]
+  }
+}

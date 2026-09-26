@@ -1,0 +1,96 @@
+[
+  {
+    "id": 31,
+    "type": "PipeWire:Interface:Metadata",
+    "metadata": []
+  },
+  {
+    "id": 35,
+    "type": "PipeWire:Interface:Metadata",
+    "metadata": []
+  },
+  {
+    "id": 37,
+    "type": "PipeWire:Interface:Metadata",
+    "metadata": []
+  },
+  {
+    "id": 40,
+    "type": "PipeWire:Interface:Metadata",
+    "metadata": [
+      {
+        "subject": 0,
+        "key": "default.video.source",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "v4l2_input.pci-0000_00_14.0-usb-0_6_1.0"
+        }
+      },
+      {
+        "subject": 0,
+        "key": "default.configured.video.source",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "v4l2_input.pci-0000_00_14.0-usb-0_6_1.0"
+        }
+      }
+    ]
+  },
+  {
+    "id": 62,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "api.v4l2.cap.bus_info": "usb-0000:00:14.0-6",
+        "api.v4l2.cap.card": "Surface Camera Front: Surface C",
+        "api.v4l2.path": "/dev/video0",
+        "media.class": "Video/Source",
+        "node.description": "Surface Camera Front (V4L2)",
+        "node.driver": true,
+        "node.loop.name": "data-loop.0",
+        "node.name": "v4l2_input.pci-0000_00_14.0-usb-0_6_1.0",
+        "node.nick": "Surface Camera Front",
+        "node.pause-on-idle": false,
+        "priority.session": 1000
+      }
+    }
+  },
+  {
+    "id": 64,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "api.v4l2.cap.bus_info": "usb-0000:00:14.0-6",
+        "api.v4l2.cap.card": "Surface Camera Front: Surface I",
+        "api.v4l2.path": "/dev/video2",
+        "media.class": "Video/Source",
+        "node.description": "Surface Camera Front (V4L2)",
+        "node.driver": true,
+        "node.loop.name": "data-loop.0",
+        "node.name": "v4l2_input.pci-0000_00_14.0-usb-0_6_1.2",
+        "node.nick": "Surface Camera Front",
+        "node.pause-on-idle": false,
+        "priority.session": 980
+      }
+    }
+  },
+  {
+    "id": 88,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "api.v4l2.cap.bus_info": "usb-0000:00:14.0-2",
+        "api.v4l2.cap.card": "NexiGo HD Webcam: NexiGo HD Web",
+        "api.v4l2.path": "/dev/video4",
+        "media.class": "Video/Source",
+        "node.description": "NexiGo HD Webcam (V4L2)",
+        "node.driver": true,
+        "node.loop.name": "data-loop.0",
+        "node.name": "v4l2_input.pci-0000_00_14.0-usb-0_2_1.0",
+        "node.nick": "NexiGo HD Webcam",
+        "node.pause-on-idle": false,
+        "priority.session": 960
+      }
+    }
+  }
+]

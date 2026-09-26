@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# webcamctl - list cameras, pick the system default, and open a live preview.
+#
+#   webcamctl list                 JSON array of PipeWire camera sources
+#   webcamctl set-default <id>     make PipeWire node <id> the default camera
+#   webcamctl preview [device]     open the preview (default camera if omitted)
+#   webcamctl toggle-preview [dev] open the preview, or close it if open
+#   webcamctl stop-preview         close the preview window
+#
+# "System camera" means PipeWire/WirePlumber's default video source
+# (default.configured.video.source). Browsers, OBS and other apps that reach
+# cameras through PipeWire or the camera portal see it as the preferred camera;
+# apps that open /dev/videoN directly pick their own device.
+set -euo pipefail
+
+self_dir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+plugin_dir=$(dirname -- "$self_dir")
+preview_qml="$plugin_dir/preview/shell.qml"
+
+# Test seams: WEBCAMCTL_PW_DUMP points at a pw-dump JSON file, WEBCAMCTL_WPCTL
+# replaces wpctl.
+pw_dump_file=${WEBCAMCTL_PW_DUMP:-}
+wpctl_bin=${WEBCAMCTL_WPCTL:-wpctl}
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-webcam"
+pid_file="$runtime_dir/preview.pid"
+
+fail() {
+  echo "webcamctl: $*" >&2
+  exit 1
+}
+
+pw_dump() {
+  if [[ -n "$pw_dump_file" ]]; then
+    cat -- "$pw_dump_file"
+  else
+    command -v pw-dump >/dev/null || fail "pw-dump not found (is PipeWire installed?)"
+    pw-dump
+  fi
+}
+
+# Infrared/depth sensors (Windows Hello style cameras) only offer greyscale
+# formats. They are real V4L2 nodes, so we list them but flag them.
+is_ir() {
+  local device=$1 formats
+  [[ -c "$device" ]] && command -v v4l2-ctl >/dev/null || { echo false; return; }
+  formats=$(v4l2-ctl -d "$device" --list-formats 2>/dev/null | sed -n "s/.*\[[0-9]*\]: '\([^']*\)'.*/\1/p")
+  [[ -n "$formats" ]] || { echo false; return; }
+  if grep -qvE '^(GREY|Y8|Y10|Y12|Y16|Y10B|Y12I|Z16)$' <<<"$formats"; then echo false; else echo true; fi
+}
+
+cmd_list() {
+  local dump cameras
+  dump=$(pw_dump)
+  cameras=$(jq -c '
+    ([.[] | select(.type == "PipeWire:Interface:Metadata")
+          | .metadata[]? | select(.key == "default.video.source") | .value.name][0] // "") as $configured
+    | [.[] | select(.info.props["media.class"]? == "Video/Source") | .info.props as $p
+        | {
+            id: .id,
+            nodeName: ($p["node.name"] // ""),
+            name: ($p["node.nick"] // ($p["node.description"] // "Camera") | sub(" \\(V4L2\\)$"; "")),
+            card: ($p["api.v4l2.cap.card"] // ""),
+            device: ($p["api.v4l2.path"] // ""),
+            bus: ($p["api.v4l2.cap.bus_info"] // ""),
+            priority: ($p["priority.session"] // 0)
+          }]
+    | (map(.priority) | max // 0) as $top
+    | (if any(.[]; .nodeName == $configured and $configured != "") then $configured
+       else (map(select(.priority == $top)) | .[0].nodeName // "") end) as $default
+    | map(. + {default: (.nodeName == $default)})
+    | sort_by(-.priority)
+  ' <<<"$dump")
+
+  # Annotate IR sensors and give same-named sensors distinguishable labels.
+  local out="[]" row device
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    device=$(jq -r '.device' <<<"$row")
+    out=$(jq -c --argjson row "$row" --argjson ir "$(is_ir "$device")" '. + [$row + {ir: $ir}]' <<<"$out")
+  done < <(jq -c '.[]' <<<"$cameras")
+  jq '
+    (group_by(.name) | map(select(length > 1) | .[0].name)) as $dupes
+    | map(if (.name as $n | $dupes | index($n)) then
+        .label = (.name + (if .ir then " (IR)" else " (" + (.device | sub("^/dev/"; "")) + ")" end))
+      else .label = .name end)
+  ' <<<"$out"
+}
+
+cmd_set_default() {
+  local id=${1:-}
+  [[ "$id" =~ ^[0-9]+$ ]] || fail "set-default needs a numeric PipeWire node id"
+  local class
+  class=$(pw_dump | jq -r --argjson id "$id" '.[] | select(.id == $id) | .info.props["media.class"] // ""')
+  [[ "$class" == "Video/Source" ]] || fail "node $id is not a camera (Video/Source)"
+  "$wpctl_bin" set-default "$id"
+}
+
+preview_pid() {
+  local pid
+  [[ -f "$pid_file" ]] || return 1
+  pid=$(<"$pid_file")
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  # Only trust the pid if it is still our preview process, never a recycled one.
+  tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$preview_qml" || return 1
+  echo "$pid"
+}
+
+cmd_stop_preview() {
+  local pid
+  if pid=$(preview_pid); then
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f -- "$pid_file"
+}
+
+cmd_preview() {
+  local device=${1:-} name=${WEBCAM_NAME:-}
+  if [[ -z "$device" ]]; then
+    # No device given: resolve the current system default right now, so a
+    # caller holding a stale camera list still previews the right one.
+    local current
+    current=$(cmd_list | jq -c 'map(select(.default)) | .[0] // empty')
+    [[ -n "$current" ]] || fail "no camera found"
+    device=$(jq -r '.device' <<<"$current")
+    [[ -n "$name" ]] || name=$(jq -r '.label' <<<"$current")
+  fi
+  if [[ ! "$device" =~ ^/dev/video[0-9]+$ ]]; then
+    fail "device must look like /dev/videoN"
+  fi
+  command -v quickshell >/dev/null || fail "quickshell not found"
+  [[ -r "$preview_qml" ]] || fail "missing $preview_qml"
+
+  cmd_stop_preview
+  mkdir -p -m 700 "$runtime_dir"
+  WEBCAM_DEVICE="$device" WEBCAM_NAME="$name" setsid quickshell -p "$preview_qml" >/dev/null 2>&1 </dev/null &
+  echo "$!" >"$pid_file"
+}
+
+cmd_toggle_preview() {
+  if preview_pid >/dev/null; then
+    cmd_stop_preview
+  else
+    cmd_preview "$@"
+  fi
+}
+
+case "${1:-}" in
+  list) shift; cmd_list "$@" ;;
+  set-default) shift; cmd_set_default "$@" ;;
+  preview) shift; cmd_preview "$@" ;;
+  toggle-preview) shift; cmd_toggle_preview "$@" ;;
+  stop-preview) shift; cmd_stop_preview ;;
+  preview-running) preview_pid >/dev/null && echo true || echo false ;;
+  -h|--help|help|"") sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) fail "unknown command: $1 (try --help)" ;;
+esac
