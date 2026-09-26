@@ -66,7 +66,7 @@ These go on the widget's entry in `~/.config/omarchy/shell.json`:
 ## Install
 
 ```bash
-omarchy plugin add <git-url> --enable
+omarchy plugin add https://github.com/ninepointlabs/omarchy-webcam.git --enable
 ```
 
 For development, symlink a checkout instead:
