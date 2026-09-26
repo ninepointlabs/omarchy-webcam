@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtMultimedia
 import Quickshell
 import Quickshell.Io
@@ -292,11 +293,23 @@ ShellRoot {
       contentHeight: controlsColumn.implicitHeight + 16
       boundsBehavior: Flickable.StopAtBounds
 
+      ScrollBar.vertical: ScrollBar {
+        id: controlsScrollBar
+        policy: controlsPanel.contentHeight > controlsPanel.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+        width: 8
+        contentItem: Rectangle {
+          implicitWidth: 6
+          color: controlsScrollBar.pressed || controlsScrollBar.hovered ? shell.accent
+            : Qt.rgba(shell.fg.r, shell.fg.g, shell.fg.b, 0.35)
+        }
+        background: Rectangle { color: Qt.rgba(shell.fg.r, shell.fg.g, shell.fg.b, 0.08) }
+      }
+
       Column {
         id: controlsColumn
         x: 12
         y: 8
-        width: controlsPanel.width - 24
+        width: controlsPanel.width - 24 - (controlsScrollBar.visible ? controlsScrollBar.width : 0)
         spacing: 10
 
         Repeater {
@@ -529,11 +542,6 @@ ShellRoot {
       }
       onPressed: function(m) { sl.dragValue = sl.value; update(m.x) }
       onPositionChanged: function(m) { if (pressed) update(m.x) }
-      onWheel: function(w) {
-        var coarse = Math.max(sl.step, sl.snap(sl.from + sl.span / 50) - sl.from)
-        var v = sl.snap(sl.value + (w.angleDelta.y > 0 ? coarse : -coarse))
-        if (v !== sl.value) sl.moved(v)
-      }
     }
   }
 
