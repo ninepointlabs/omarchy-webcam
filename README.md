@@ -63,6 +63,7 @@ Requirements: PipeWire + WirePlumber (`pw-dump`, `wpctl`), `jq`, `v4l-utils` (`v
 | Reset one setting | Double-click its name (a `•` marks changed settings) |
 | Reset every setting | **Reset all** at the bottom of the settings |
 | Stop the preview | `s` in the popup, `✕` / `Esc` in the preview window |
+| About (version, license, support, privacy) | The 󰋽 button at the top of the popup, or `i`; `Esc` or **Back** returns |
 
 ### Keybinding / scripting
 
@@ -71,6 +72,7 @@ omarchy-shell ninepointlabs.webcam toggle        # open/close the picker
 omarchy-shell ninepointlabs.webcam preview       # preview the current default camera
 omarchy-shell ninepointlabs.webcam settings      # preview + image settings for the default camera
 omarchy-shell ninepointlabs.webcam stopPreview
+omarchy-shell ninepointlabs.webcam about         # open the popup on its About page
 
 # The helper works on its own, too:
 bin/webcamctl list                 # JSON camera list
@@ -89,6 +91,10 @@ bin/webcamctl restore              # reapply saved settings to every camera
 - The bar widget reapplies saved settings when the shell starts and whenever a camera appears. It checks every 10 seconds, so after you replug a camera its settings may take a few seconds to come back.
 - These are hardware settings, so they apply to every app that uses the camera, not just the preview.
 
+### About
+
+The info button (󰋽) in the popup's header, `i`, or `omarchy-shell ninepointlabs.webcam about` opens **About**: the version (read from `manifest.json`), Nine Point Labs, when it was created, the license (readable in place), the Quickshell and Qt versions, and support at [help@ninepointlabs.com](mailto:help@ninepointlabs.com) with **Email** (opens your mail app with the version details filled in), **Copy** and **Copy version details** buttons. It also says what the widget does with your data: no accounts, no telemetry and no network access; video is only captured while a preview window is showing and is never recorded or saved; image settings are saved in `~/.local/state/omarchy-webcam/controls/`.
+
 ## Settings
 
 These go on the widget's entry in `~/.config/omarchy/shell.json`:
@@ -100,7 +106,7 @@ These go on the widget's entry in `~/.config/omarchy/shell.json`:
 
 ## How it's built
 
-- `Webcam.qml`: the bar icon and popup. It never parses devices on its own; it only renders the JSON that `webcamctl list` returns.
+- `Webcam.qml`: the bar icon and popup. `AboutView.qml` and `About.js` are its About page. It never parses devices on its own; it only renders the JSON that `webcamctl list` returns.
 - `bin/webcamctl`: reads image controls with `v4l2-ctl`, applies auto-mode switches before the manual values they unlock, and saves changes per camera. It also reads the camera list from `pw-dump`, validates every node id and device path, switches the default with `wpctl`, and manages a single preview process. It keeps a pid file under `$XDG_RUNTIME_DIR` and checks the process's identity before sending it a signal.
 - `preview/shell.qml`: a standalone Quickshell layer-shell window that uses QtMultimedia. It runs as a **separate process**, so a stuck or crashing camera driver cannot take down the Omarchy shell and bar.
 
@@ -108,9 +114,15 @@ These go on the widget's entry in `~/.config/omarchy/shell.json`:
 
 ```bash
 test/webcamctl.test.sh
+node --test test/about.test.cjs
+test/panel.test.sh
 ```
 
-Runs the helper against a recorded `pw-dump` fixture, a fake `wpctl`, and a fake `v4l2-ctl` that mimics how the driver locks manual controls while auto modes are on. It does not need real cameras.
+`webcamctl.test.sh` runs the helper against a recorded `pw-dump` fixture, a fake `wpctl`, and a fake `v4l2-ctl` that mimics how the driver locks manual controls while auto modes are on. It does not need real cameras.
+
+`about.test.cjs` checks the About page's facts against the real `manifest.json`, `LICENSE` and first commit, and fails if a network host shows up in the code without being named in the privacy statement.
+
+`panel.test.sh` loads `Webcam.qml` in a real Quickshell (it needs the Wayland session; the popup opens briefly) with the same fixtures and no network, and walks the About page: the info button, license, Back, the `about` IPC call, and closing.
 
 ## License
 

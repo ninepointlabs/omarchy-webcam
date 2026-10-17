@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "About.js" as About
 
 // Bar widget: pick the system (PipeWire default) camera and open a live
 // preview. All device discovery and switching goes through bin/webcamctl;
@@ -20,6 +21,10 @@ Panel {
   property bool previewRunning: false
   property string lastError: ""
   property var knownDevices: []
+  // The About page replaces the camera list inside the same popup. Its
+  // files (manifest.json for the version, LICENSE) load the first time.
+  property bool showAbout: false
+  property bool aboutLoaded: false
 
   readonly property string webcamctl: String(Qt.resolvedUrl("bin/webcamctl")).replace(/^file:\/\//, "")
   readonly property bool showIr: setting("showIr", true) === true
@@ -104,6 +109,11 @@ Panel {
 
   function stopPreview() { run(["stop-preview"]) }
 
+  function setAbout(on) {
+    showAbout = !!on
+    if (on) aboutLoaded = true
+  }
+
   function moveCursor(delta) {
     var n = visibleCameras.length
     if (n === 0) return
@@ -122,10 +132,12 @@ Panel {
     function stopPreview(): void { root.stopPreview() }
     // Preview the default camera with its image controls expanded.
     function settings(): void { root.preview(null, true) }
+    // The popup's About page: version, license, support, privacy.
+    function about(): void { root.setAbout(true); root.open() }
   }
 
   onOpenedChanged: {
-    if (!opened) return
+    if (!opened) { showAbout = false; return }
     refresh()
     cursorActive = false
     var idx = visibleCameras.indexOf(defaultCamera)
@@ -136,6 +148,18 @@ Panel {
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
+
+  FileView {
+    id: manifestFile
+    path: root.aboutLoaded ? String(Qt.resolvedUrl("manifest.json")).replace(/^file:\/\//, "") : ""
+    printErrors: false
+  }
+
+  FileView {
+    id: licenseFile
+    path: root.aboutLoaded ? String(Qt.resolvedUrl("LICENSE")).replace(/^file:\/\//, "") : ""
+    printErrors: false
+  }
 
   Process {
     id: listProc
@@ -200,20 +224,45 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(520))
+    contentHeight: panel.fittedContentHeight(root.showAbout ? aboutView.implicitHeight : column.implicitHeight, Style.space(520))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { root.moveCursor(dy !== 0 ? dy : dx) }
-      onActivateRequested: if (root.cursorActive) root.setDefault(root.visibleCameras[root.selectedIndex])
-      onCloseRequested: root.close()
+      onActivateRequested: if (!root.showAbout && root.cursorActive) root.setDefault(root.visibleCameras[root.selectedIndex])
+      // Esc steps back out of About before it closes the popup.
+      onCloseRequested: root.showAbout ? root.setAbout(false) : root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        if (t === "p") root.preview(root.cursorActive ? root.visibleCameras[root.selectedIndex] : null)
+        if (t === "i" || t === "?") root.setAbout(!root.showAbout)
+        else if (root.showAbout) return
+        else if (t === "p") root.preview(root.cursorActive ? root.visibleCameras[root.selectedIndex] : null)
         else if (t === "a") root.preview(root.cursorActive ? root.visibleCameras[root.selectedIndex] : null, true)
         else if (t === "s") root.stopPreview()
         else if (t === "r") root.refresh()
+      }
+
+      // About scrolls on its own when it is taller than the popup allows.
+      Flickable {
+        anchors.fill: parent
+        visible: root.showAbout
+        contentWidth: width
+        contentHeight: aboutView.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+
+        AboutView {
+          id: aboutView
+          width: parent.width
+          foreground: root.foreground
+          accent: Color.accent
+          fontFamily: root.fontFamily
+          version: About.manifestVersion(manifestFile.loaded ? manifestFile.text() : "")
+          licenseText: licenseFile.loaded ? licenseFile.text() : ""
+          onBackRequested: root.setAbout(false)
+        }
       }
 
       Column {
@@ -221,6 +270,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
+        visible: !root.showAbout
         spacing: Style.space(14)
 
         // ---------- Hero ----------
@@ -243,7 +293,8 @@ Panel {
             id: heroLabels
             anchors.left: heroIcon.right
             anchors.leftMargin: Style.space(14)
-            anchors.right: parent.right
+            anchors.right: aboutButton.left
+            anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
 
@@ -272,6 +323,18 @@ Panel {
               elide: Text.ElideRight
               width: parent.width
             }
+          }
+
+          PanelActionButton {
+            id: aboutButton
+            objectName: "aboutButton"
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "\u{F02FD}"
+            tooltipText: "About Omarchy Webcam (i)"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.setAbout(true)
           }
         }
 
